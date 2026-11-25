@@ -1,218 +1,3 @@
-mkdir -p public && cat << 'EOF' > package.json
-{
-  "name": "360-roofing-podio-tracker",
-  "version": "1.0.0",
-  "description": "Custom 360 Roofing Project Roadmap Dashboard synced with Podio API",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "axios": "^1.7.7",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.1"
-  }
-}
-EOF
-
-cat << 'EOF' > .env
-PORT=3000
-
-# Podio API Credentials (Podio > Account Settings > API Keys)
-PODIO_CLIENT_ID=your_podio_client_id
-PODIO_CLIENT_SECRET=your_podio_client_secret
-
-# Podio App Credentials (Projects App > Wrench Icon > Developer)
-PODIO_APP_ID=your_podio_app_id
-PODIO_APP_TOKEN=your_podio_app_token
-
-# External IDs of your fields inside the Podio Projects App
-PODIO_STAGE_FIELD_ID=project-stage
-PODIO_ADDRESS_FIELD_ID=property-address
-PODIO_INSURANCE_FIELD_ID=insurance-carrier
-PODIO_REP_FIELD_ID=sales-rep
-PODIO_VALUE_FIELD_ID=claim-amount
-EOF
-
-cat << 'EOF' > server.js
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
-const path = require('path');
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-const {
-  PORT = 3000,
-  PODIO_CLIENT_ID,
-  PODIO_CLIENT_SECRET,
-  PODIO_APP_ID,
-  PODIO_APP_TOKEN,
-  PODIO_STAGE_FIELD_ID = 'project-stage',
-  PODIO_ADDRESS_FIELD_ID = 'property-address',
-  PODIO_INSURANCE_FIELD_ID = 'insurance-carrier',
-  PODIO_REP_FIELD_ID = 'sales-rep',
-  PODIO_VALUE_FIELD_ID = 'claim-amount'
-} = process.env;
-
-let cachedToken = null;
-let tokenExpiresAt = 0;
-const sseClients = new Set();
-
-function isPodioConfigured() {
-  return Boolean(
-    PODIO_CLIENT_ID &&
-    PODIO_CLIENT_SECRET &&
-    PODIO_APP_ID &&
-    PODIO_APP_TOKEN &&
-    !PODIO_CLIENT_ID.startsWith('your_')
-  );
-}
-
-async function getPodioToken() {
-  const now = Date.now();
-  if (cachedToken && now < tokenExpiresAt - 60000) {
-    return cachedToken;
-  }
-
-  const response = await axios.post('https://api.podio.com/oauth/token', null, {
-    params: {
-      grant_type: 'app',
-      app_id: PODIO_APP_ID,
-      app_token: PODIO_APP_TOKEN,
-      client_id: PODIO_CLIENT_ID,
-      client_secret: PODIO_CLIENT_SECRET
-    }
-  });
-
-  cachedToken = response.data.access_token;
-  tokenExpiresAt = now + (response.data.expires_in || 28800) * 1000;
-  return cachedToken;
-}
-
-function extractFieldText(fields, externalId, fallback = '') {
-  const field = fields.find((f) => f.external_id === externalId);
-  if (!field || !field.values || field.values.length === 0) return fallback;
-
-  const val = field.values[0];
-  if (typeof val.value === 'string') return val.value.replace(/<[^>]*>/g, '').trim();
-  if (val.value?.text) return val.value.text;
-  if (val.value?.name) return val.value.name;
-  if (val.value?.formatted) return val.value.formatted;
-  if (val.value !== undefined) return String(val.value);
-  return fallback;
-}
-
-app.get('/api/customers', async (req, res) => {
-  if (!isPodioConfigured()) {
-    return res.json({ mode: 'demo', customers: [] });
-  }
-
-  try {
-    const token = await getPodioToken();
-    const response = await axios.post(
-      `https://api.podio.com/item/app/${PODIO_APP_ID}/filter/`,
-      { limit: 500, sort_by: 'last_edit_on', sort_desc: true },
-      { headers: { Authorization: `OAuth2 ${token}` } }
-    );
-
-    const customers = response.data.items.map((item) => ({
-      id: String(item.item_id),
-      name: item.title || 'Unnamed Homeowner',
-      stage: extractFieldText(item.fields, PODIO_STAGE_FIELD_ID, '1. LEAD'),
-      address: extractFieldText(item.fields, PODIO_ADDRESS_FIELD_ID, 'Address not set'),
-      insurance: extractFieldText(item.fields, PODIO_INSURANCE_FIELD_ID, 'Retail / Cash'),
-      rep: extractFieldText(item.fields, PODIO_REP_FIELD_ID, 'Unassigned'),
-      value: extractFieldText(item.fields, PODIO_VALUE_FIELD_ID, ''),
-      podioUrl: item.link,
-      updatedAt: item.last_event_on || item.created_on
-    }));
-
-    res.json({ mode: 'live', customers });
-  } catch (error) {
-    console.error('Podio fetch error:', error.response?.data || error.message);
-    res.status(500).json({
-      error: 'Failed to load items from Podio',
-      details: error.response?.data || error.message
-    });
-  }
-});
-
-app.put('/api/customers/:itemId/stage', async (req, res) => {
-  const { itemId } = req.params;
-  const { stage } = req.body;
-
-  if (!stage) return res.status(400).json({ error: 'Target stage is required' });
-  if (!isPodioConfigured()) return res.json({ success: true, mode: 'demo', itemId, stage });
-
-  try {
-    const token = await getPodioToken();
-    await axios.put(
-      `https://api.podio.com/item/${itemId}/value/${PODIO_STAGE_FIELD_ID}`,
-      { value: stage },
-      { headers: { Authorization: `OAuth2 ${token}` } }
-    );
-
-    res.json({ success: true, mode: 'live', itemId, stage });
-  } catch (error) {
-    console.error('Podio stage update error:', error.response?.data || error.message);
-    res.status(500).json({
-      error: 'Failed to update stage in Podio',
-      details: error.response?.data || error.message
-    });
-  }
-});
-
-app.get('/api/events', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
-});
-
-app.post('/api/podio-webhook', async (req, res) => {
-  const { type, hook_id, code, item_id } = req.body;
-
-  try {
-    if (type === 'hook.verify' && hook_id && code) {
-      const token = await getPodioToken();
-      await axios.post(
-        `https://api.podio.com/hook/${hook_id}/verify/validate`,
-        { code },
-        { headers: { Authorization: `OAuth2 ${token}` } }
-      );
-      return res.sendStatus(200);
-    }
-
-    if (type === 'item.create' || type === 'item.update' || type === 'item.delete') {
-      const payload = JSON.stringify({ type, item_id, timestamp: Date.now() });
-      for (const client of sseClients) {
-        client.write(`data: ${payload}\n\n`);
-      }
-    }
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Webhook error:', error.response?.data || error.message);
-    res.sendStatus(500);
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`360 Roofing Project Tracker running at http://localhost:${PORT}`);
-  console.log(`Mode: ${isPodioConfigured() ? 'LIVE PODIO API' : 'DEMO MODE (Add .env keys to connect Podio)'}`);
-});
-EOF
-
-cat << 'EOF' > public/index.html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -263,7 +48,7 @@ cat << 'EOF' > public/index.html
 
       <div class="flex flex-wrap items-center gap-3">
         <span id="connectionBadge" class="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
-          Connecting...
+          Demo Mode
         </span>
 
         <input
@@ -289,7 +74,7 @@ cat << 'EOF' > public/index.html
 
   <section class="max-w-[1800px] w-full mx-auto px-6 pb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
     <div class="text-gray-600">
-      Tip: Drag and drop any customer card into another step to update their stage directly in Podio.
+      Tip: Drag and drop any customer card into another step to update their stage.
     </div>
     <label class="inline-flex items-center gap-2 font-semibold text-brandCharcoal cursor-pointer select-none">
       <input id="hideEmptyToggle" type="checkbox" class="accent-brandTeal w-4 h-4" />
@@ -301,290 +86,273 @@ cat << 'EOF' > public/index.html
     <div id="boardContainer" class="board-scroll flex gap-4 overflow-x-auto pb-4 flex-1 items-start"></div>
   </main>
 
-  <script src="app.js"></script>
+  <script>
+    const PHASES = [
+      { id: 'ALL', label: 'ALL PHASES (22 STEPS)' },
+      { id: 'PHASE 1', label: 'PHASE 1: CLAIM & APPROVAL TRACKING' },
+      { id: 'PHASE 2', label: 'PHASE 2: PRODUCTION & INSTALLATION' },
+      { id: 'PHASE 3', label: 'PHASE 3: BUILD & COMPLETION' },
+      { id: 'COMPLETE', label: 'PROCESS COMPLETE' }
+    ];
+
+    const ROADMAP_STAGES = [
+      { num: 1, label: '1. LEAD', phase: 'PHASE 1' },
+      { num: 2, label: '2. INSPECTION', phase: 'PHASE 1' },
+      { num: 3, label: '3. CONTRACT SIGNED & CLAIM FILED', phase: 'PHASE 1' },
+      { num: 4, label: '4. ADJUSTER MEETING', phase: 'PHASE 1' },
+      { num: 5, label: '5. SCOPE / ESTIMATE REVIEW', phase: 'PHASE 1' },
+      { num: 6, label: '6. FIRST INSURANCE PAYMENT', phase: 'PHASE 1' },
+      { num: 7, label: '7. MORTGAGE ENDORSEMENT (if applicable)', phase: 'PHASE 2' },
+      { num: 8, label: '8. SUPPLEMENTS', phase: 'PHASE 2' },
+      { num: 9, label: '9. INSURANCE FOLLOW-UP / APPROVAL TRACKING', phase: 'PHASE 2' },
+      { num: 10, label: '10. MORTGAGE CHECK RECEIVED', phase: 'PHASE 2' },
+      { num: 11, label: '11. PRE-PRODUCTION', phase: 'PHASE 2' },
+      { num: 12, label: '12. SCHEDULE JOB', phase: 'PHASE 2' },
+      { num: 13, label: '13. MATERIAL ORDER & DELIVERY', phase: 'PHASE 2' },
+      { num: 14, label: '14. PRE-JOB COMMUNICATION', phase: 'PHASE 2' },
+      { num: 15, label: '15. BUILD DAY', phase: 'PHASE 3' },
+      { num: 16, label: '16. QC / CLEANUP', phase: 'PHASE 3' },
+      { num: 17, label: '17. REVIEW & REFERRAL', phase: 'PHASE 3' },
+      { num: 18, label: '18. INVOICE CUSTOMER', phase: 'PHASE 3' },
+      { num: 19, label: '19. COC TO INSURANCE', phase: 'PHASE 3' },
+      { num: 20, label: '20. DEPRECIATION / SUPPLEMENT COLLECTION', phase: 'PHASE 3' },
+      { num: 21, label: '21. FINAL PAYMENT', phase: 'COMPLETE' },
+      { num: 22, label: '22. CLOSED', phase: 'COMPLETE' }
+    ];
+
+    const DEMO_CUSTOMERS = [
+      { id: '101', name: 'Marcus & Elena Vance', stage: '2. INSPECTION', address: '412 Oakridge Dr', insurance: 'State Farm', rep: 'Jordan M.', value: '$24,500' },
+      { id: '102', name: 'David & Sarah Miller', stage: '4. ADJUSTER MEETING', address: '1890 Pinecrest Ln', insurance: 'Allstate', rep: 'Chris T.', value: '$31,200' },
+      { id: '103', name: 'Robert Henderson', stage: '8. SUPPLEMENTS', address: '77 Meadowbrook Ct', insurance: 'USAA', rep: 'Jordan M.', value: '$28,900' },
+      { id: '104', name: 'Angela & Kevin Brooks', stage: '12. SCHEDULE JOB', address: '905 Cedar Hollow', insurance: 'Liberty Mutual', rep: 'Taylor R.', value: '$19,800' },
+      { id: '105', name: 'Carlos Mendoza', stage: '15. BUILD DAY', address: '3321 Sycamore Ave', insurance: 'Travelers', rep: 'Chris T.', value: '$36,400' },
+      { id: '106', name: 'Patricia Morales', stage: '19. COC TO INSURANCE', address: '614 Birchwood Way', insurance: 'Farmers', rep: 'Taylor R.', value: '$22,150' },
+      { id: '107', name: 'Nathaniel & Grace Cho', stage: '21. FINAL PAYMENT', address: '128 Summit Ridge', insurance: 'State Farm', rep: 'Jordan M.', value: '$27,600' }
+    ];
+
+    let customers = [...DEMO_CUSTOMERS];
+    let selectedPhase = 'ALL';
+    let searchQuery = '';
+    let hideEmpty = false;
+    let draggedCustomerId = null;
+
+    function normalizeStage(rawStage) {
+      if (!rawStage) return ROADMAP_STAGES[0].label;
+      const clean = rawStage.trim().toUpperCase();
+      const numMatch = clean.match(/^(\d{1,2})[\.\-\s]/);
+      if (numMatch) {
+        const foundByNum = ROADMAP_STAGES.find((s) => s.num === Number(numMatch[1]));
+        if (foundByNum) return foundByNum.label;
+      }
+      const foundByText = ROADMAP_STAGES.find(
+        (s) => s.label.toUpperCase() === clean || s.label.toUpperCase().includes(clean)
+      );
+      return foundByText ? foundByText.label : ROADMAP_STAGES[0].label;
+    }
+
+    async function loadCustomers() {
+      const badge = document.getElementById('connectionBadge');
+      try {
+        const res = await fetch('/api/customers');
+        if (!res.ok) throw new Error('Static host');
+        const data = await res.json();
+        if (data.mode === 'live') {
+          customers = data.customers.map((c) => ({ ...c, stage: normalizeStage(c.stage) }));
+          badge.textContent = `Podio Live Sync (${customers.length} Projects)`;
+          badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-teal-100 text-teal-900';
+        }
+      } catch (err) {
+        badge.textContent = 'Demo Preview (Connect Render backend for Live Podio)';
+        badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
+      }
+      renderAll();
+    }
+
+    function getFilteredCustomers() {
+      if (!searchQuery) return customers;
+      const q = searchQuery.toLowerCase();
+      return customers.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.address.toLowerCase().includes(q) ||
+          c.insurance.toLowerCase().includes(q) ||
+          c.rep.toLowerCase().includes(q)
+      );
+    }
+
+    function renderPhaseSummary() {
+      const grid = document.getElementById('phaseSummaryGrid');
+      const filtered = getFilteredCustomers();
+
+      grid.innerHTML = PHASES.map((phase) => {
+        const count =
+          phase.id === 'ALL'
+            ? filtered.length
+            : filtered.filter((c) => {
+                const st = ROADMAP_STAGES.find((s) => s.label === c.stage);
+                return st && st.phase === phase.id;
+              }).length;
+
+        const isActive = selectedPhase === phase.id;
+        return `
+          <button
+            onclick="selectPhase('${phase.id}')"
+            class="text-left p-3.5 rounded-xl border-2 transition shadow-sm flex items-center justify-between ${
+              isActive
+                ? 'bg-brandCharcoal text-white border-brandTeal'
+                : 'bg-white text-brandCharcoal border-gray-200 hover:border-brandTeal'
+            }"
+          >
+            <div>
+              <div class="text-[11px] font-extrabold tracking-wide ${
+                isActive ? 'text-brandTeal' : 'text-gray-500'
+              }">${phase.label}</div>
+              <div class="text-2xl font-black mt-0.5">${count} <span class="text-xs font-semibold opacity-75">Customers</span></div>
+            </div>
+          </button>
+        `;
+      }).join('');
+    }
+
+    function renderBoard() {
+      const board = document.getElementById('boardContainer');
+      const filtered = getFilteredCustomers();
+
+      const visibleStages = ROADMAP_STAGES.filter((st) => {
+        if (selectedPhase !== 'ALL' && st.phase !== selectedPhase) return false;
+        if (hideEmpty) return filtered.some((c) => c.stage === st.label);
+        return true;
+      });
+
+      board.innerHTML = visibleStages
+        .map((stageObj) => {
+          const stageCustomers = filtered.filter((c) => c.stage === stageObj.label);
+          const isComplete = stageObj.phase === 'COMPLETE';
+
+          return `
+            <div
+              class="stage-column w-72 shrink-0 bg-gray-100/90 border-2 border-gray-200 rounded-xl flex flex-col max-h-[72vh] transition"
+              data-stage="${stageObj.label}"
+              ondragover="handleDragOver(event)"
+              ondragleave="handleDragLeave(event)"
+              ondrop="handleDrop(event, '${stageObj.label}')"
+            >
+              <div class="p-3 rounded-t-lg ${
+                isComplete ? 'bg-brandTeal text-white' : 'bg-brandCharcoal text-white'
+              } flex items-center justify-between gap-2">
+                <div class="text-xs font-extrabold leading-snug tracking-wide">${stageObj.label}</div>
+                <span class="px-2 py-0.5 rounded-full text-xs font-black ${
+                  isComplete ? 'bg-white text-brandCharcoal' : 'bg-brandTeal text-white'
+                }">${stageCustomers.length}</span>
+              </div>
+
+              <div class="p-2.5 space-y-2.5 overflow-y-auto flex-1 min-h-[120px]">
+                ${
+                  stageCustomers.length === 0
+                    ? `<div class="text-center text-xs text-gray-400 py-8 border border-dashed border-gray-300 rounded-lg">
+                         No customers in this step
+                       </div>`
+                    : stageCustomers
+                        .map(
+                          (cust) => `
+                    <div
+                      draggable="true"
+                      ondragstart="handleDragStart(event, '${cust.id}')"
+                      class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:border-brandTeal cursor-grab active:cursor-grabbing transition"
+                    >
+                      <div class="flex items-start justify-between gap-2">
+                        <h4 class="font-bold text-sm text-brandCharcoal leading-tight">${cust.name}</h4>
+                        ${
+                          cust.value
+                            ? `<span class="text-[11px] font-extrabold text-brandTeal bg-brandTeal/10 px-1.5 py-0.5 rounded">${cust.value}</span>`
+                            : ''
+                        }
+                      </div>
+                      <p class="text-xs text-gray-500 mt-1">${cust.address}</p>
+                      <div class="mt-2.5 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-600">
+                        <span class="font-semibold">${cust.insurance}</span>
+                        <span>Rep: <strong>${cust.rep}</strong></span>
+                      </div>
+                      ${
+                        cust.podioUrl
+                          ? `<a href="${cust.podioUrl}" target="_blank" class="mt-2 inline-block text-[11px] font-bold text-brandTeal hover:underline">
+                               Open in Podio →
+                             </a>`
+                          : ''
+                      }
+                    </div>
+                  `
+                        )
+                        .join('')
+                }
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    function renderAll() {
+      renderPhaseSummary();
+      renderBoard();
+    }
+
+    window.handleDragStart = (e, id) => {
+      draggedCustomerId = id;
+      e.dataTransfer.effectAllowed = 'move';
+    };
+
+    window.handleDragOver = (e) => {
+      e.preventDefault();
+      e.currentTarget.classList.add('drag-over');
+    };
+
+    window.handleDragLeave = (e) => {
+      e.currentTarget.classList.remove('drag-over');
+    };
+
+    window.handleDrop = async (e, targetStage) => {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      if (!draggedCustomerId) return;
+
+      const customer = customers.find((c) => c.id === draggedCustomerId);
+      if (!customer || customer.stage === targetStage) return;
+
+      customer.stage = targetStage;
+      renderAll();
+
+      try {
+        await fetch(`/api/customers/${customer.id}/stage`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stage: targetStage })
+        });
+      } catch (err) {
+        // Stays updated locally in demo mode
+      } finally {
+        draggedCustomerId = null;
+      }
+    };
+
+    window.selectPhase = (phaseId) => {
+      selectedPhase = phaseId;
+      renderAll();
+    };
+
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      renderAll();
+    });
+
+    document.getElementById('hideEmptyToggle').addEventListener('change', (e) => {
+      hideEmpty = e.target.checked;
+      renderBoard();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', loadCustomers);
+
+    loadCustomers();
+  </script>
 </body>
 </html>
-EOF
-
-cat << 'EOF' > public/app.js
-const PHASES = [
-  { id: 'ALL', label: 'ALL PHASES (22 STEPS)' },
-  { id: 'PHASE 1', label: 'PHASE 1: CLAIM & APPROVAL TRACKING' },
-  { id: 'PHASE 2', label: 'PHASE 2: PRODUCTION & INSTALLATION' },
-  { id: 'PHASE 3', label: 'PHASE 3: BUILD & COMPLETION' },
-  { id: 'COMPLETE', label: 'PROCESS COMPLETE' }
-];
-
-const ROADMAP_STAGES = [
-  { num: 1, label: '1. LEAD', phase: 'PHASE 1' },
-  { num: 2, label: '2. INSPECTION', phase: 'PHASE 1' },
-  { num: 3, label: '3. CONTRACT SIGNED & CLAIM FILED', phase: 'PHASE 1' },
-  { num: 4, label: '4. ADJUSTER MEETING', phase: 'PHASE 1' },
-  { num: 5, label: '5. SCOPE / ESTIMATE REVIEW', phase: 'PHASE 1' },
-  { num: 6, label: '6. FIRST INSURANCE PAYMENT', phase: 'PHASE 1' },
-  { num: 7, label: '7. MORTGAGE ENDORSEMENT (if applicable)', phase: 'PHASE 2' },
-  { num: 8, label: '8. SUPPLEMENTS', phase: 'PHASE 2' },
-  { num: 9, label: '9. INSURANCE FOLLOW-UP / APPROVAL TRACKING', phase: 'PHASE 2' },
-  { num: 10, label: '10. MORTGAGE CHECK RECEIVED', phase: 'PHASE 2' },
-  { num: 11, label: '11. PRE-PRODUCTION', phase: 'PHASE 2' },
-  { num: 12, label: '12. SCHEDULE JOB', phase: 'PHASE 2' },
-  { num: 13, label: '13. MATERIAL ORDER & DELIVERY', phase: 'PHASE 2' },
-  { num: 14, label: '14. PRE-JOB COMMUNICATION', phase: 'PHASE 2' },
-  { num: 15, label: '15. BUILD DAY', phase: 'PHASE 3' },
-  { num: 16, label: '16. QC / CLEANUP', phase: 'PHASE 3' },
-  { num: 17, label: '17. REVIEW & REFERRAL', phase: 'PHASE 3' },
-  { num: 18, label: '18. INVOICE CUSTOMER', phase: 'PHASE 3' },
-  { num: 19, label: '19. COC TO INSURANCE', phase: 'PHASE 3' },
-  { num: 20, label: '20. DEPRECIATION / SUPPLEMENT COLLECTION', phase: 'PHASE 3' },
-  { num: 21, label: '21. FINAL PAYMENT', phase: 'COMPLETE' },
-  { num: 22, label: '22. CLOSED', phase: 'COMPLETE' }
-];
-
-const DEMO_CUSTOMERS = [
-  { id: '101', name: 'Marcus & Elena Vance', stage: '2. INSPECTION', address: '412 Oakridge Dr', insurance: 'State Farm', rep: 'Jordan M.', value: '$24,500' },
-  { id: '102', name: 'David & Sarah Miller', stage: '4. ADJUSTER MEETING', address: '1890 Pinecrest Ln', insurance: 'Allstate', rep: 'Chris T.', value: '$31,200' },
-  { id: '103', name: 'Robert Henderson', stage: '8. SUPPLEMENTS', address: '77 Meadowbrook Ct', insurance: 'USAA', rep: 'Jordan M.', value: '$28,900' },
-  { id: '104', name: 'Angela & Kevin Brooks', stage: '12. SCHEDULE JOB', address: '905 Cedar Hollow', insurance: 'Liberty Mutual', rep: 'Taylor R.', value: '$19,800' },
-  { id: '105', name: 'Carlos Mendoza', stage: '15. BUILD DAY', address: '3321 Sycamore Ave', insurance: 'Travelers', rep: 'Chris T.', value: '$36,400' },
-  { id: '106', name: 'Patricia Morales', stage: '19. COC TO INSURANCE', address: '614 Birchwood Way', insurance: 'Farmers', rep: 'Taylor R.', value: '$22,150' },
-  { id: '107', name: 'Nathaniel & Grace Cho', stage: '21. FINAL PAYMENT', address: '128 Summit Ridge', insurance: 'State Farm', rep: 'Jordan M.', value: '$27,600' }
-];
-
-let customers = [];
-let selectedPhase = 'ALL';
-let searchQuery = '';
-let hideEmpty = false;
-let draggedCustomerId = null;
-
-function normalizeStage(rawStage) {
-  if (!rawStage) return ROADMAP_STAGES[0].label;
-  const clean = rawStage.trim().toUpperCase();
-  const numMatch = clean.match(/^(\d{1,2})[\.\-\s]/);
-  if (numMatch) {
-    const foundByNum = ROADMAP_STAGES.find((s) => s.num === Number(numMatch[1]));
-    if (foundByNum) return foundByNum.label;
-  }
-  const foundByText = ROADMAP_STAGES.find(
-    (s) => s.label.toUpperCase() === clean || s.label.toUpperCase().includes(clean)
-  );
-  return foundByText ? foundByText.label : ROADMAP_STAGES[0].label;
-}
-
-async function loadCustomers() {
-  const badge = document.getElementById('connectionBadge');
-  try {
-    const res = await fetch('/api/customers');
-    const data = await res.json();
-
-    if (data.mode === 'live') {
-      customers = data.customers.map((c) => ({ ...c, stage: normalizeStage(c.stage) }));
-      badge.textContent = `Podio Live Sync (${customers.length} Projects)`;
-      badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-teal-100 text-teal-900';
-    } else {
-      customers = [...DEMO_CUSTOMERS];
-      badge.textContent = 'Demo Mode (Add Podio .env keys for live data)';
-      badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
-    }
-  } catch (err) {
-    customers = [...DEMO_CUSTOMERS];
-    badge.textContent = 'Offline / Demo Data';
-    badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-red-100 text-red-800';
-  }
-  renderAll();
-}
-
-function getFilteredCustomers() {
-  if (!searchQuery) return customers;
-  const q = searchQuery.toLowerCase();
-  return customers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(q) ||
-      c.address.toLowerCase().includes(q) ||
-      c.insurance.toLowerCase().includes(q) ||
-      c.rep.toLowerCase().includes(q)
-  );
-}
-
-function renderPhaseSummary() {
-  const grid = document.getElementById('phaseSummaryGrid');
-  const filtered = getFilteredCustomers();
-
-  grid.innerHTML = PHASES.map((phase) => {
-    const count =
-      phase.id === 'ALL'
-        ? filtered.length
-        : filtered.filter((c) => {
-            const st = ROADMAP_STAGES.find((s) => s.label === c.stage);
-            return st && st.phase === phase.id;
-          }).length;
-
-    const isActive = selectedPhase === phase.id;
-    return `
-      <button
-        onclick="selectPhase('${phase.id}')"
-        class="text-left p-3.5 rounded-xl border-2 transition shadow-sm flex items-center justify-between ${
-          isActive
-            ? 'bg-brandCharcoal text-white border-brandTeal'
-            : 'bg-white text-brandCharcoal border-gray-200 hover:border-brandTeal'
-        }"
-      >
-        <div>
-          <div class="text-[11px] font-extrabold tracking-wide ${
-            isActive ? 'text-brandTeal' : 'text-gray-500'
-          }">${phase.label}</div>
-          <div class="text-2xl font-black mt-0.5">${count} <span class="text-xs font-semibold opacity-75">Customers</span></div>
-        </div>
-      </button>
-    `;
-  }).join('');
-}
-
-function renderBoard() {
-  const board = document.getElementById('boardContainer');
-  const filtered = getFilteredCustomers();
-
-  const visibleStages = ROADMAP_STAGES.filter((st) => {
-    if (selectedPhase !== 'ALL' && st.phase !== selectedPhase) return false;
-    if (hideEmpty) return filtered.some((c) => c.stage === st.label);
-    return true;
-  });
-
-  board.innerHTML = visibleStages
-    .map((stageObj) => {
-      const stageCustomers = filtered.filter((c) => c.stage === stageObj.label);
-      const isComplete = stageObj.phase === 'COMPLETE';
-
-      return `
-        <div
-          class="stage-column w-72 shrink-0 bg-gray-100/90 border-2 border-gray-200 rounded-xl flex flex-col max-h-[72vh] transition"
-          data-stage="${stageObj.label}"
-          ondragover="handleDragOver(event)"
-          ondragleave="handleDragLeave(event)"
-          ondrop="handleDrop(event, '${stageObj.label}')"
-        >
-          <div class="p-3 rounded-t-lg ${
-            isComplete ? 'bg-brandTeal text-white' : 'bg-brandCharcoal text-white'
-          } flex items-center justify-between gap-2">
-            <div class="text-xs font-extrabold leading-snug tracking-wide">${stageObj.label}</div>
-            <span class="px-2 py-0.5 rounded-full text-xs font-black ${
-              isComplete ? 'bg-white text-brandCharcoal' : 'bg-brandTeal text-white'
-            }">${stageCustomers.length}</span>
-          </div>
-
-          <div class="p-2.5 space-y-2.5 overflow-y-auto flex-1 min-h-[120px]">
-            ${
-              stageCustomers.length === 0
-                ? `<div class="text-center text-xs text-gray-400 py-8 border border-dashed border-gray-300 rounded-lg">
-                     No customers in this step
-                   </div>`
-                : stageCustomers
-                    .map(
-                      (cust) => `
-                <div
-                  draggable="true"
-                  ondragstart="handleDragStart(event, '${cust.id}')"
-                  class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:border-brandTeal cursor-grab active:cursor-grabbing transition"
-                >
-                  <div class="flex items-start justify-between gap-2">
-                    <h4 class="font-bold text-sm text-brandCharcoal leading-tight">${cust.name}</h4>
-                    ${
-                      cust.value
-                        ? `<span class="text-[11px] font-extrabold text-brandTeal bg-brandTeal/10 px-1.5 py-0.5 rounded">${cust.value}</span>`
-                        : ''
-                    }
-                  </div>
-                  <p class="text-xs text-gray-500 mt-1">${cust.address}</p>
-                  <div class="mt-2.5 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-600">
-                    <span class="font-semibold">${cust.insurance}</span>
-                    <span>Rep: <strong>${cust.rep}</strong></span>
-                  </div>
-                  ${
-                    cust.podioUrl
-                      ? `<a href="${cust.podioUrl}" target="_blank" class="mt-2 inline-block text-[11px] font-bold text-brandTeal hover:underline">
-                           Open in Podio →
-                         </a>`
-                      : ''
-                  }
-                </div>
-              `
-                    )
-                    .join('')
-            }
-          </div>
-        </div>
-      `;
-    })
-    .join('');
-}
-
-function renderAll() {
-  renderPhaseSummary();
-  renderBoard();
-}
-
-window.handleDragStart = (e, id) => {
-  draggedCustomerId = id;
-  e.dataTransfer.effectAllowed = 'move';
-};
-
-window.handleDragOver = (e) => {
-  e.preventDefault();
-  e.currentTarget.classList.add('drag-over');
-};
-
-window.handleDragLeave = (e) => {
-  e.currentTarget.classList.remove('drag-over');
-};
-
-window.handleDrop = async (e, targetStage) => {
-  e.preventDefault();
-  e.currentTarget.classList.remove('drag-over');
-  if (!draggedCustomerId) return;
-
-  const customer = customers.find((c) => c.id === draggedCustomerId);
-  if (!customer || customer.stage === targetStage) return;
-
-  const previousStage = customer.stage;
-  customer.stage = targetStage;
-  renderAll();
-
-  try {
-    const res = await fetch(`/api/customers/${customer.id}/stage`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage: targetStage })
-    });
-    if (!res.ok) throw new Error('Podio update failed');
-  } catch (err) {
-    alert('Could not update Podio stage. Reverting card.');
-    customer.stage = previousStage;
-    renderAll();
-  } finally {
-    draggedCustomerId = null;
-  }
-};
-
-window.selectPhase = (phaseId) => {
-  selectedPhase = phaseId;
-  renderAll();
-};
-
-document.getElementById('searchInput').addEventListener('input', (e) => {
-  searchQuery = e.target.value;
-  renderAll();
-});
-
-document.getElementById('hideEmptyToggle').addEventListener('change', (e) => {
-  hideEmpty = e.target.checked;
-  renderBoard();
-});
-
-document.getElementById('refreshBtn').addEventListener('click', loadCustomers);
-
-const eventSource = new EventSource('/api/events');
-eventSource.onmessage = () => loadCustomers();
-
-loadCustomers();
-EOF
-
-npm install && npm start
