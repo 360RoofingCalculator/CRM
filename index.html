@@ -20,33 +20,47 @@
     };
   </script>
   <style>
-    .board-scroll::-webkit-scrollbar { height: 10px; }
-    .board-scroll::-webkit-scrollbar-track { background: #e5e7eb; border-radius: 6px; }
-    .board-scroll::-webkit-scrollbar-thumb { background: #3cb8a6; border-radius: 6px; }
-    .stage-column.drag-over { background-color: #e6f7f4; border-color: #3cb8a6; }
+    .stage-card.drag-over {
+      background-color: #e6f7f4;
+      border-color: #3cb8a6;
+      transform: translateY(-2px);
+    }
   </style>
 </head>
 <body class="bg-brandSlate text-brandCharcoal min-h-screen flex flex-col font-sans">
 
-  <header class="bg-white border-b-4 border-brandTeal shadow-sm px-6 py-4">
-    <div class="max-w-[1800px] mx-auto flex flex-wrap items-center justify-between gap-4">
+  <!-- Top Branded Header -->
+  <header class="bg-white border-b-4 border-brandTeal shadow-sm px-6 py-4 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+      <!-- 360 Roofing Logo -->
       <div class="flex items-center gap-4">
-        <div class="flex items-center gap-2.5">
-          <div class="w-11 h-11 rounded-full bg-brandTeal/15 border-2 border-brandTeal flex items-center justify-center font-black text-brandTeal text-sm">
-            360
-          </div>
+        <img
+          src="./Logo-Horizontal-Color_2.png"
+          alt="360 Roofing"
+          class="h-14 w-auto object-contain"
+          onerror="this.style.display='none'; document.getElementById('fallbackLogo').classList.remove('hidden');"
+        />
+        <!-- Crisp Vector Fallback if PNG isn't uploaded to repo yet -->
+        <div id="fallbackLogo" class="hidden flex items-center gap-2.5">
+          <svg class="w-12 h-12" viewBox="0 0 100 100" fill="none">
+            <path d="M18 32 H62 M10 46 H55 M24 60 H50" stroke="#3cb8a6" stroke-width="5" stroke-linecap="round"/>
+            <path d="M58 24 C76 20, 90 34, 88 52 C86 66, 72 74, 58 70" stroke="#3cb8a6" stroke-width="5" stroke-linecap="round"/>
+            <circle cx="66" cy="40" r="3" fill="#3cb8a6"/><circle cx="58" cy="48" r="3.5" fill="#3cb8a6"/>
+            <circle cx="75" cy="44" r="2.5" fill="#2d2d2d"/>
+          </svg>
           <div>
-            <div class="text-xl font-black tracking-tight text-brandCharcoal leading-none">
-              360<span class="text-brandTeal">ROOFING</span>
+            <div class="text-2xl font-black tracking-tight text-brandCharcoal leading-none">
+              36<span class="text-brandTeal">0</span>ROOFING
             </div>
-            <div class="text-[11px] font-semibold uppercase tracking-widest text-gray-500 mt-0.5">
-              Project Roadmap & Podio Live Tracker
+            <div class="text-[11px] font-bold uppercase tracking-widest text-gray-500 mt-0.5">
+              The 360 Roofing Project Roadmap
             </div>
           </div>
         </div>
       </div>
 
-      <div class="flex flex-wrap items-center gap-3">
+      <!-- Search & Podio Sync Controls -->
+      <div class="flex flex-wrap items-center gap-2.5">
         <span id="connectionBadge" class="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
           Demo Mode
         </span>
@@ -55,7 +69,7 @@
           id="searchInput"
           type="text"
           placeholder="Search customer, address, insurance, rep..."
-          class="w-72 px-3.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brandTeal"
+          class="w-64 sm:w-72 px-3.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brandTeal"
         />
 
         <button
@@ -64,27 +78,66 @@
         >
           Sync Podio
         </button>
+
+        <button
+          onclick="openSetupModal()"
+          title="Configure Podio Backend URL"
+          class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-brandCharcoal text-sm font-bold rounded-lg border border-gray-300 transition"
+        >
+          ⚙ Podio Setup
+        </button>
       </div>
     </div>
   </header>
 
-  <section class="max-w-[1800px] w-full mx-auto px-6 pt-5 pb-3">
+  <!-- Phase Filter Cards -->
+  <section class="max-w-7xl w-full mx-auto px-6 pt-6 pb-3">
     <div id="phaseSummaryGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3"></div>
   </section>
 
-  <section class="max-w-[1800px] w-full mx-auto px-6 pb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-    <div class="text-gray-600">
-      Tip: Drag and drop any customer card into another step to update their stage.
+  <!-- Filter Bar -->
+  <section class="max-w-7xl w-full mx-auto px-6 pb-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+    <div class="text-gray-600 font-medium">
+      Scroll down to view all phases & steps. Drag any customer card into another step box to move them.
     </div>
-    <label class="inline-flex items-center gap-2 font-semibold text-brandCharcoal cursor-pointer select-none">
+    <label class="inline-flex items-center gap-2 font-bold text-brandCharcoal cursor-pointer select-none bg-white px-3 py-1.5 rounded-lg border border-gray-200">
       <input id="hideEmptyToggle" type="checkbox" class="accent-brandTeal w-4 h-4" />
-      Hide empty steps
+      Show only steps with customers
     </label>
   </section>
 
-  <main class="flex-1 max-w-[1800px] w-full mx-auto px-6 pb-8 overflow-hidden flex flex-col">
-    <div id="boardContainer" class="board-scroll flex gap-4 overflow-x-auto pb-4 flex-1 items-start"></div>
+  <!-- Vertical Scrolling Roadmap Phases & Grid -->
+  <main id="boardContainer" class="max-w-7xl w-full mx-auto px-6 pb-14 space-y-8">
+    <!-- Phases & 22 Roadmap Step Cards render vertically here -->
   </main>
+
+  <!-- Podio Backend Connection Modal -->
+  <div id="setupModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border-t-4 border-brandTeal">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-black text-brandCharcoal">Connect Live Podio Backend</h3>
+        <button onclick="closeSetupModal()" class="text-gray-400 hover:text-gray-700 font-bold text-lg">✕</button>
+      </div>
+      <p class="text-xs text-gray-600 leading-relaxed mb-4">
+        GitHub Pages hosts your visual dashboard, while your Node.js server (hosted on Render.com) securely holds your Podio API keys. Paste your Render Web Service URL below to enable live two-way Podio syncing:
+      </p>
+      <label class="block text-xs font-bold text-brandCharcoal mb-1">Backend Server URL</label>
+      <input
+        id="backendUrlInput"
+        type="url"
+        placeholder="https://your-360roofing-api.onrender.com"
+        class="w-full px-3.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brandTeal mb-4"
+      />
+      <div class="flex justify-end gap-2">
+        <button onclick="closeSetupModal()" class="px-4 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-lg">
+          Cancel
+        </button>
+        <button onclick="saveBackendUrl()" class="px-4 py-2 text-xs font-bold bg-brandTeal hover:bg-brandTealDark text-white rounded-lg">
+          Save & Sync Now
+        </button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const PHASES = [
@@ -95,6 +148,32 @@
       { id: 'COMPLETE', label: 'PROCESS COMPLETE' }
     ];
 
+    // Custom SVG icons matching every step on your 360 Roofing Project Roadmap
+    const STEP_ICONS = {
+      1: `<path d="M3 17l5-2 6 2 7-3M7 11l5-5 5 5M9 10v5h6v-5" />`, // Lead (house over hand)
+      2: `<path d="M4 11l8-6 8 6M14 14a3.5 3.5 0 1 0 0 .01M16.5 16.5L20 20" />`, // Inspection (roof + magnifier)
+      3: `<path d="M6 3h9l4 4v14H6zM9 11h6M9 15h4M15 17l4-4" />`, // Contract signed & claim filed
+      4: `<path d="M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM5 20a5 5 0 0 1 14 0M4 11a2.5 2.5 0 1 0 0-5M20 11a2.5 2.5 0 1 1 0-5" />`, // Adjuster meeting
+      5: `<path d="M5 3h11v18H5zM8 7h5M8 11h5M16 15a3 3 0 1 0 0 .01M18.5 17.5L21 20" />`, // Scope / Estimate review
+      6: `<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M7 9v6M17 9v6" />`, // First insurance payment
+      7: `<path d="M3 10l9-6 9 6M5 10v9h14v-9M12 12v5M10 14.5h4" />`, // Mortgage endorsement
+      8: `<path d="M6 3h9l4 4v14H6zM15 14v6M12 17h6" />`, // Supplements (+ document)
+      9: `<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2zM16 4v4M19 6v2" />`, // Insurance follow-up
+      10: `<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h6M6 14h4M16 12h2" />`, // Mortgage check received
+      11: `<path d="M4 13h16M7 13v6M17 13v6M9 4h6v5H9z" />`, // Pre-production
+      12: `<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15h6" />`, // Schedule job
+      13: `<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>`, // Material order & delivery
+      14: `<path d="M4 11l11-5v12L4 13v-2zM15 9c2 1 2 5 0 6M7 14l1 5" />`, // Pre-job communication
+      15: `<path d="M3 11l9-7 9 7M6 10v10h12V10M10 14l4 4M14 14l-4 4" />`, // Build day
+      16: `<path d="M12 3v12M8 15h8l1 6H7l1-6z" />`, // QC / Cleanup
+      17: `<path d="M12 3l2 4 4.5.5-3.2 3 .8 4.5L12 13l-4.1 2 .8-4.5-3.2-3L10 7zM7 20h10" />`, // Review & Referral
+      18: `<path d="M5 3h14v18l-3-2-4 2-4-2-3 2V3zM8 8h8M8 12h5" />`, // Invoice customer
+      19: `<rect x="3" y="5" width="18" height="12" rx="2"/><circle cx="16" cy="16" r="3"/><path d="M7 9h6M7 13h4" />`, // COC to insurance
+      20: `<path d="M4 7h14l-3-3M20 17H6l3 3"/><rect x="7" y="9" width="10" height="6" rx="1"/>`, // Depreciation / Supplement collection
+      21: `<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4" />`, // Final payment
+      22: `<path d="M12 4l-5 5h10l-5-5z"/><rect x="4" y="9" width="16" height="9" rx="1.5"/><path d="M9 13.5l2 2 4-4" />` // Closed sign
+    };
+
     const ROADMAP_STAGES = [
       { num: 1, label: '1. LEAD', phase: 'PHASE 1' },
       { num: 2, label: '2. INSPECTION', phase: 'PHASE 1' },
@@ -102,6 +181,7 @@
       { num: 4, label: '4. ADJUSTER MEETING', phase: 'PHASE 1' },
       { num: 5, label: '5. SCOPE / ESTIMATE REVIEW', phase: 'PHASE 1' },
       { num: 6, label: '6. FIRST INSURANCE PAYMENT', phase: 'PHASE 1' },
+
       { num: 7, label: '7. MORTGAGE ENDORSEMENT (if applicable)', phase: 'PHASE 2' },
       { num: 8, label: '8. SUPPLEMENTS', phase: 'PHASE 2' },
       { num: 9, label: '9. INSURANCE FOLLOW-UP / APPROVAL TRACKING', phase: 'PHASE 2' },
@@ -110,12 +190,14 @@
       { num: 12, label: '12. SCHEDULE JOB', phase: 'PHASE 2' },
       { num: 13, label: '13. MATERIAL ORDER & DELIVERY', phase: 'PHASE 2' },
       { num: 14, label: '14. PRE-JOB COMMUNICATION', phase: 'PHASE 2' },
+
       { num: 15, label: '15. BUILD DAY', phase: 'PHASE 3' },
       { num: 16, label: '16. QC / CLEANUP', phase: 'PHASE 3' },
       { num: 17, label: '17. REVIEW & REFERRAL', phase: 'PHASE 3' },
       { num: 18, label: '18. INVOICE CUSTOMER', phase: 'PHASE 3' },
       { num: 19, label: '19. COC TO INSURANCE', phase: 'PHASE 3' },
       { num: 20, label: '20. DEPRECIATION / SUPPLEMENT COLLECTION', phase: 'PHASE 3' },
+
       { num: 21, label: '21. FINAL PAYMENT', phase: 'COMPLETE' },
       { num: 22, label: '22. CLOSED', phase: 'COMPLETE' }
     ];
@@ -136,6 +218,26 @@
     let hideEmpty = false;
     let draggedCustomerId = null;
 
+    function getApiBaseUrl() {
+      return (localStorage.getItem('podioBackendUrl') || '').replace(/\/$/, '');
+    }
+
+    window.openSetupModal = () => {
+      document.getElementById('backendUrlInput').value = getApiBaseUrl();
+      document.getElementById('setupModal').classList.remove('hidden');
+    };
+
+    window.closeSetupModal = () => {
+      document.getElementById('setupModal').classList.add('hidden');
+    };
+
+    window.saveBackendUrl = () => {
+      const url = document.getElementById('backendUrlInput').value.trim();
+      localStorage.setItem('podioBackendUrl', url);
+      closeSetupModal();
+      loadCustomers();
+    };
+
     function normalizeStage(rawStage) {
       if (!rawStage) return ROADMAP_STAGES[0].label;
       const clean = rawStage.trim().toUpperCase();
@@ -152,17 +254,25 @@
 
     async function loadCustomers() {
       const badge = document.getElementById('connectionBadge');
+      const baseUrl = getApiBaseUrl();
+
       try {
-        const res = await fetch('/api/customers');
-        if (!res.ok) throw new Error('Static host');
+        const res = await fetch(`${baseUrl}/api/customers`);
+        if (!res.ok) throw new Error('Backend not connected');
         const data = await res.json();
+
         if (data.mode === 'live') {
           customers = data.customers.map((c) => ({ ...c, stage: normalizeStage(c.stage) }));
           badge.textContent = `Podio Live Sync (${customers.length} Projects)`;
           badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-teal-100 text-teal-900';
+        } else {
+          customers = [...DEMO_CUSTOMERS];
+          badge.textContent = 'Demo Mode (Click ⚙ Podio Setup)';
+          badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
         }
       } catch (err) {
-        badge.textContent = 'Demo Preview (Connect Render backend for Live Podio)';
+        customers = [...DEMO_CUSTOMERS];
+        badge.textContent = 'Demo Mode (Click ⚙ Podio Setup to link Podio)';
         badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800';
       }
       renderAll();
@@ -217,76 +327,112 @@
     function renderBoard() {
       const board = document.getElementById('boardContainer');
       const filtered = getFilteredCustomers();
+      const phasesToRender = PHASES.filter((p) => p.id !== 'ALL' && (selectedPhase === 'ALL' || selectedPhase === p.id));
 
-      const visibleStages = ROADMAP_STAGES.filter((st) => {
-        if (selectedPhase !== 'ALL' && st.phase !== selectedPhase) return false;
-        if (hideEmpty) return filtered.some((c) => c.stage === st.label);
-        return true;
-      });
+      board.innerHTML = phasesToRender
+        .map((phaseObj) => {
+          const phaseStages = ROADMAP_STAGES.filter((st) => {
+            if (st.phase !== phaseObj.id) return false;
+            if (hideEmpty) return filtered.some((c) => c.stage === st.label);
+            return true;
+          });
 
-      board.innerHTML = visibleStages
-        .map((stageObj) => {
-          const stageCustomers = filtered.filter((c) => c.stage === stageObj.label);
-          const isComplete = stageObj.phase === 'COMPLETE';
+          if (phaseStages.length === 0) return '';
+          const isCompletePhase = phaseObj.id === 'COMPLETE';
 
           return `
-            <div
-              class="stage-column w-72 shrink-0 bg-gray-100/90 border-2 border-gray-200 rounded-xl flex flex-col max-h-[72vh] transition"
-              data-stage="${stageObj.label}"
-              ondragover="handleDragOver(event)"
-              ondragleave="handleDragLeave(event)"
-              ondrop="handleDrop(event, '${stageObj.label}')"
-            >
-              <div class="p-3 rounded-t-lg ${
-                isComplete ? 'bg-brandTeal text-white' : 'bg-brandCharcoal text-white'
-              } flex items-center justify-between gap-2">
-                <div class="text-xs font-extrabold leading-snug tracking-wide">${stageObj.label}</div>
-                <span class="px-2 py-0.5 rounded-full text-xs font-black ${
-                  isComplete ? 'bg-white text-brandCharcoal' : 'bg-brandTeal text-white'
-                }">${stageCustomers.length}</span>
+            <section class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <!-- Phase Section Banner -->
+              <div class="${
+                isCompletePhase ? 'bg-brandTeal text-white' : 'bg-brandCharcoal text-white'
+              } px-5 py-3 flex items-center justify-between">
+                <h2 class="text-sm sm:text-base font-black tracking-wide">${phaseObj.label}</h2>
+                <span class="text-xs font-bold opacity-90">${phaseStages.length} Steps</span>
               </div>
 
-              <div class="p-2.5 space-y-2.5 overflow-y-auto flex-1 min-h-[120px]">
-                ${
-                  stageCustomers.length === 0
-                    ? `<div class="text-center text-xs text-gray-400 py-8 border border-dashed border-gray-300 rounded-lg">
-                         No customers in this step
-                       </div>`
-                    : stageCustomers
-                        .map(
-                          (cust) => `
-                    <div
-                      draggable="true"
-                      ondragstart="handleDragStart(event, '${cust.id}')"
-                      class="bg-white p-3 rounded-lg border border-gray-200 shadow-sm hover:border-brandTeal cursor-grab active:cursor-grabbing transition"
-                    >
-                      <div class="flex items-start justify-between gap-2">
-                        <h4 class="font-bold text-sm text-brandCharcoal leading-tight">${cust.name}</h4>
-                        ${
-                          cust.value
-                            ? `<span class="text-[11px] font-extrabold text-brandTeal bg-brandTeal/10 px-1.5 py-0.5 rounded">${cust.value}</span>`
-                            : ''
-                        }
+              <!-- Vertical-Scroll Responsive Grid (No Horizontal Scroll Needed) -->
+              <div class="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                ${phaseStages
+                  .map((stageObj) => {
+                    const stageCustomers = filtered.filter((c) => c.stage === stageObj.label);
+                    return `
+                      <div
+                        class="stage-card bg-brandSlate/80 border-2 border-gray-200 rounded-xl p-3.5 flex flex-col justify-between transition"
+                        data-stage="${stageObj.label}"
+                        ondragover="handleDragOver(event)"
+                        ondragleave="handleDragLeave(event)"
+                        ondrop="handleDrop(event, '${stageObj.label}')"
+                      >
+                        <!-- Step Header with Roadmap Icon -->
+                        <div>
+                          <div class="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-gray-200">
+                            <div class="flex items-center gap-2.5">
+                              <div class="w-9 h-9 rounded-lg bg-brandTeal/15 text-brandTeal flex items-center justify-center shrink-0">
+                                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                  ${STEP_ICONS[stageObj.num] || ''}
+                                </svg>
+                              </div>
+                              <h3 class="text-xs font-black text-brandCharcoal leading-snug">
+                                ${stageObj.label}
+                              </h3>
+                            </div>
+                            <span class="px-2 py-0.5 rounded-full text-xs font-black shrink-0 ${
+                              stageCustomers.length > 0
+                                ? 'bg-brandTeal text-white'
+                                : 'bg-gray-200 text-gray-600'
+                            }">
+                              ${stageCustomers.length}
+                            </span>
+                          </div>
+
+                          <!-- Customers in this Step -->
+                          <div class="space-y-2 min-h-[54px]">
+                            ${
+                              stageCustomers.length === 0
+                                ? `<div class="text-center text-[11px] text-gray-400 py-3 border border-dashed border-gray-300 rounded-lg">
+                                     Drop customer here
+                                   </div>`
+                                : stageCustomers
+                                    .map(
+                                      (cust) => `
+                                  <div
+                                    draggable="true"
+                                    ondragstart="handleDragStart(event, '${cust.id}')"
+                                    class="bg-white p-2.5 rounded-lg border border-gray-200 shadow-sm hover:border-brandTeal cursor-grab active:cursor-grabbing transition"
+                                  >
+                                    <div class="flex items-start justify-between gap-2">
+                                      <div class="font-bold text-xs text-brandCharcoal leading-tight">${cust.name}</div>
+                                      ${
+                                        cust.value
+                                          ? `<span class="text-[10px] font-extrabold text-brandTeal bg-brandTeal/10 px-1.5 py-0.5 rounded shrink-0">${cust.value}</span>`
+                                          : ''
+                                      }
+                                    </div>
+                                    <div class="text-[11px] text-gray-500 mt-0.5">${cust.address}</div>
+                                    <div class="mt-2 pt-1.5 border-t border-gray-100 flex items-center justify-between text-[10px] text-gray-600">
+                                      <span class="font-semibold">${cust.insurance}</span>
+                                      <span>Rep: <strong>${cust.rep}</strong></span>
+                                    </div>
+                                    ${
+                                      cust.podioUrl
+                                        ? `<a href="${cust.podioUrl}" target="_blank" class="mt-1.5 inline-block text-[10px] font-bold text-brandTeal hover:underline">
+                                             Open in Podio →
+                                           </a>`
+                                        : ''
+                                    }
+                                  </div>
+                                `
+                                    )
+                                    .join('')
+                            }
+                          </div>
+                        </div>
                       </div>
-                      <p class="text-xs text-gray-500 mt-1">${cust.address}</p>
-                      <div class="mt-2.5 pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] text-gray-600">
-                        <span class="font-semibold">${cust.insurance}</span>
-                        <span>Rep: <strong>${cust.rep}</strong></span>
-                      </div>
-                      ${
-                        cust.podioUrl
-                          ? `<a href="${cust.podioUrl}" target="_blank" class="mt-2 inline-block text-[11px] font-bold text-brandTeal hover:underline">
-                               Open in Podio →
-                             </a>`
-                          : ''
-                      }
-                    </div>
-                  `
-                        )
-                        .join('')
-                }
+                    `;
+                  })
+                  .join('')}
               </div>
-            </div>
+            </section>
           `;
         })
         .join('');
@@ -319,17 +465,27 @@
       const customer = customers.find((c) => c.id === draggedCustomerId);
       if (!customer || customer.stage === targetStage) return;
 
+      const previousStage = customer.stage;
       customer.stage = targetStage;
       renderAll();
 
+      const baseUrl = getApiBaseUrl();
+      if (!baseUrl) {
+        draggedCustomerId = null;
+        return;
+      }
+
       try {
-        await fetch(`/api/customers/${customer.id}/stage`, {
+        const res = await fetch(`${baseUrl}/api/customers/${customer.id}/stage`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ stage: targetStage })
         });
+        if (!res.ok) throw new Error('Podio update failed');
       } catch (err) {
-        // Stays updated locally in demo mode
+        alert('Could not update Podio stage. Reverting card.');
+        customer.stage = previousStage;
+        renderAll();
       } finally {
         draggedCustomerId = null;
       }
